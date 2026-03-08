@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter_app/screens/intro_screen.dart';
 import 'firebase_options.dart';
+import 'screens/get_started_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,12 +21,12 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         scaffoldBackgroundColor: Colors.black,
         brightness: Brightness.dark,
-        colorScheme: ColorScheme.dark(
+        colorScheme: const ColorScheme.dark(
           surface: Colors.black,
           primary: Colors.blueAccent,
         ),
       ),
-      home: const IntroScreen(),
+      home: const GetStartedScreen(), // ALWAYS start here
     );
   }
 }

@@ -1,0 +1,415 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'driver_tracking_screen.dart';
+
+class DriverRouteScreen extends StatefulWidget {
+  final String busId;
+  final String busName;
+  final String busNumber;
+
+  const DriverRouteScreen({
+    super.key,
+    required this.busId,
+    required this.busName,
+    required this.busNumber,
+  });
+
+  @override
+  State<DriverRouteScreen> createState() => _DriverRouteScreenState();
+}
+
+class _DriverRouteScreenState extends State<DriverRouteScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  final TextEditingController _startController = TextEditingController();
+  final TextEditingController _endController = TextEditingController();
+  final TextEditingController _stopsController = TextEditingController();
+
+  bool _isSaving = false;
+  bool _isLoading = true;
+  String? _statusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExistingRoute();
+  }
+
+  @override
+  void dispose() {
+    _startController.dispose();
+    _endController.dispose();
+    _stopsController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadExistingRoute() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('buses')
+          .doc(widget.busId)
+          .get();
+
+      final data = doc.data();
+      if (data != null) {
+        final start = data['start'] as String?;
+        final end = data['end'] as String?;
+        final stops = (data['stops'] as List?)?.cast<String>();
+
+        if (start != null) _startController.text = start;
+        if (end != null) _endController.text = end;
+        if (stops != null && stops.isNotEmpty) {
+          _stopsController.text = stops.join(', ');
+        }
+      }
+    } catch (e) {
+      _statusMessage = 'Could not load previous route details.';
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveRoute() async {
+    if (_isSaving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final start = _startController.text.trim();
+    final end = _endController.text.trim();
+    final stopsRaw = _stopsController.text.trim();
+
+    final stops = stopsRaw
+        .split(RegExp(r'[,\n]'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    setState(() {
+      _isSaving = true;
+      _statusMessage = null;
+    });
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('buses')
+          .doc(widget.busId)
+          .set({
+            'routeName': '$start - $end',
+            'start': start,
+            'end': end,
+            'stops': stops,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+
+      if (!mounted) return;
+
+      setState(() {
+        _statusMessage = 'Route saved successfully.';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route saved successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Failed to save route. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openInGoogleMaps() async {
+    final start = _startController.text.trim();
+    final end = _endController.text.trim();
+
+    if (start.isEmpty || end.isEmpty) {
+      setState(() {
+        _statusMessage = 'Enter both start and end locations first.';
+      });
+      return;
+    }
+
+    final uri = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1'
+      '&origin=${Uri.encodeComponent(start)}'
+      '&destination=${Uri.encodeComponent(end)}'
+      '&travelmode=driving',
+    );
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!launched) {
+      setState(() {
+        _statusMessage = 'Could not open Google Maps.';
+      });
+    }
+  }
+
+  void _openLiveTracking() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DriverTrackingScreen(busId: widget.busId),
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: Colors.white70),
+      filled: true,
+      fillColor: const Color(0xFF0B1120),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: Colors.white.withOpacity(0.05)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: Colors.blueAccent, width: 1.2),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: Colors.redAccent),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: Colors.redAccent),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF020617),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF020617),
+        elevation: 0,
+        title: const Text('Driver Route'),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Colors.blueAccent),
+              )
+            : Padding(
+                padding: const EdgeInsets.all(20),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0B1120),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.06),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.busName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Bus Number: ${widget.busNumber}',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Bus ID: ${widget.busId}',
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Route details',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Enter the route information for this bus and manage live tracking.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                      const SizedBox(height: 20),
+                      TextFormField(
+                        controller: _startController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _inputDecoration('Starting point'),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Enter starting point';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _endController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _inputDecoration('Ending point'),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Enter ending point';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _stopsController,
+                        style: const TextStyle(color: Colors.white),
+                        maxLines: 4,
+                        decoration: _inputDecoration(
+                          'Stops (comma or new line separated)',
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      if (_statusMessage != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.06),
+                            ),
+                          ),
+                          child: Text(
+                            _statusMessage!,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      const Spacer(),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(
+                                  color: Colors.blueAccent,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                              ),
+                              onPressed: _openInGoogleMaps,
+                              child: const Text(
+                                'Open Maps',
+                                style: TextStyle(
+                                  color: Colors.blueAccent,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blueAccent,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                              ),
+                              onPressed: _isSaving ? null : _saveRoute,
+                              child: _isSaving
+                                  ? const SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text(
+                                      'Save Route',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 54,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E293B),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                          ),
+                          onPressed: _openLiveTracking,
+                          child: const Text(
+                            'Open Live Tracking',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}

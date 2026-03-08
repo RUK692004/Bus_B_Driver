@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'sign_up_screen.dart';
-import 'bus_search_screen.dart';
+import 'driver_bus_dashboard_screen.dart';
+import 'driver_sign_up_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -52,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => const BusSearchScreen(),
+          builder: (_) => const DriverBusDashboardScreen(),
         ),
       );
     } on FirebaseAuthException catch (e) {
@@ -119,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         children: [
                           const Text(
-                            "Login",
+                            "Driver Login",
                             style: TextStyle(
                               fontSize: 32,
                               fontWeight: FontWeight.bold,
@@ -134,7 +134,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 12),
                               decoration: BoxDecoration(
-                                color: Colors.red.shade900.withOpacity(0.5),
+                                color: Colors.red.shade900.withValues(alpha: 0.5),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Row(
@@ -232,12 +232,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (_) => const SignUpScreen(),
+                                        builder: (_) => const DriverSignUpScreen(),
                                       ),
                                     );
                                   },
                             child: const Text(
-                              "Don't have an account? Sign Up",
+                              "Create driver account",
                               style: TextStyle(color: Colors.white70),
                             ),
                           ),
