@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'driver_tracking_screen.dart';
+import 'login_screen.dart';
 
 class DriverRouteScreen extends StatefulWidget {
   final String busId;
@@ -30,6 +32,7 @@ class _DriverRouteScreenState extends State<DriverRouteScreen> {
   final List<String> _stopsList = [];
 
   bool _isSaving = false;
+  bool _isDeleting = false;
   bool _isLoading = true;
   String? _statusMessage;
 
@@ -198,6 +201,90 @@ class _DriverRouteScreenState extends State<DriverRouteScreen> {
     }
   }
 
+  Future<void> _deleteBus() async {
+    if (_isDeleting) return;
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete this bus?'),
+          content: const Text(
+            'All data for this bus will be removed from the database. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('No'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text(
+                'Yes',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) return;
+
+    setState(() {
+      _isDeleting = true;
+      _statusMessage = null;
+    });
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
+
+      // Bus + route details are stored here.
+      batch.delete(db.collection('buses').doc(widget.busId));
+      // Live tracking location for this bus.
+      batch.delete(db.collection('bus_locations').doc(widget.busId));
+
+      await batch.commit();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bus deleted successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = 'Failed to delete bus. Please try again.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Delete failed'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDeleting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
   void _openLiveTracking() {
     Navigator.push(
       context,
@@ -275,6 +362,13 @@ class _DriverRouteScreenState extends State<DriverRouteScreen> {
         elevation: 0,
         title: const Text('Driver Route'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            onPressed: _logout,
+          ),
+        ],
       ),
       body: SafeArea(
         child: _isLoading
@@ -317,14 +411,7 @@ class _DriverRouteScreenState extends State<DriverRouteScreen> {
                                   fontSize: 14,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Bus ID: ${widget.busId}',
-                                style: const TextStyle(
-                                  color: Colors.white38,
-                                  fontSize: 12,
-                                ),
-                              ),
+                              // Bus ID is intentionally hidden in UI.
                             ],
                           ),
                         ),
@@ -509,6 +596,37 @@ class _DriverRouteScreenState extends State<DriverRouteScreen> {
                             child: const Text(
                               'Open Live Tracking',
                               style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 54,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                            ),
+                            onPressed: _isDeleting ? null : _deleteBus,
+                            icon: _isDeleting
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.delete_outline),
+                            label: Text(
+                              _isDeleting ? 'Deleting...' : 'Delete Bus',
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,

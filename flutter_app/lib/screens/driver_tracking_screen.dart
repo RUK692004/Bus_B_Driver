@@ -15,18 +15,25 @@ class DriverTrackingScreen extends StatefulWidget {
 }
 
 class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
-  StreamSubscription<Position>? _sub;
+  Timer? _timer;
   bool _isStarting = false;
   bool _isTracking = false;
+  bool _isSending = false;
+  bool _isSavingManual = false;
   String? _status;
   Position? _lastPosition;
   DateTime? _lastSentAt;
 
   @override
   void dispose() {
-    _sub?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
+
+  static const _locationSettings = LocationSettings(
+    accuracy: LocationAccuracy.high,
+    distanceFilter: 10, // meters
+  );
 
   Future<void> _ensurePermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
@@ -46,6 +53,59 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
     }
   }
 
+  DocumentReference<Map<String, dynamic>> _busLocationDoc(String uid) {
+    final docId = widget.busId ?? uid;
+    return FirebaseFirestore.instance.collection('bus_locations').doc(docId);
+  }
+
+  Future<void> _pushCurrentLocation(User user) async {
+    if (_isSending) return;
+    _isSending = true;
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: _locationSettings,
+      );
+      _lastPosition = pos;
+
+      await _busLocationDoc(user.uid).set(<String, Object?>{
+        'driverUid': user.uid,
+        if (widget.busId != null) 'busId': widget.busId,
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'accuracy': pos.accuracy,
+        'speed': pos.speed,
+        'heading': pos.heading,
+        'sentAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      setState(() {
+        _lastSentAt = DateTime.now();
+        _status = 'Live location sent';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = 'Failed to send: $e';
+      });
+      rethrow;
+    } finally {
+      _isSending = false;
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _toggleLiveFromChip() async {
+    if (_isStarting) return;
+    if (_isTracking) {
+      await _stopTracking();
+      return;
+    }
+    await _startTracking();
+  }
+
   Future<void> _startTracking() async {
     if (_isStarting || _isTracking) return;
     setState(() {
@@ -60,59 +120,29 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
         throw Exception('Not logged in.');
       }
 
-      final settings = const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // meters
-      );
+      Future<void> sendNow() async {
+        try {
+          await _pushCurrentLocation(user);
+        } catch (_) {
+          // Error already surfaced via _status in _pushCurrentLocation.
+        }
+      }
 
-      final docId = widget.busId ?? user.uid;
-      final doc = FirebaseFirestore.instance.collection('bus_locations').doc(docId);
+      // Send immediately when tracking starts.
+      await sendNow();
 
-      _sub = Geolocator.getPositionStream(locationSettings: settings).listen(
-        (pos) async {
-          _lastPosition = pos;
-          try {
-            await doc.set(
-              <String, Object?>{
-                'driverUid': user.uid,
-                if (widget.busId != null) 'busId': widget.busId,
-                'lat': pos.latitude,
-                'lng': pos.longitude,
-                'accuracy': pos.accuracy,
-                'speed': pos.speed,
-                'heading': pos.heading,
-                'sentAt': FieldValue.serverTimestamp(),
-              },
-              SetOptions(merge: true),
-            );
-            if (!mounted) return;
-            setState(() {
-              _lastSentAt = DateTime.now();
-              _status = 'Live location sent';
-            });
-          } catch (e) {
-            if (!mounted) return;
-            setState(() {
-              _status = 'Failed to send: $e';
-            });
-          }
-          if (!mounted) return;
-          setState(() {});
-        },
-        onError: (e) {
-          if (!mounted) return;
-          setState(() {
-            _status = 'Tracking error: $e';
-          });
-        },
-      );
+      // Auto-save current GPS periodically (while screen is open).
+      _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+        sendNow();
+      });
 
       if (!mounted) return;
       setState(() {
         _isTracking = true;
-        _status = 'Tracking started';
+        _status = 'Live on — auto-update every 4 seconds (tap LIVE to stop)';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _status = e.toString();
       });
@@ -125,9 +155,47 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
     }
   }
 
+  Future<void> _saveLocationNow() async {
+    if (_isSavingManual) return;
+    setState(() {
+      _isSavingManual = true;
+    });
+    try {
+      await _ensurePermission();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('Not logged in.');
+      }
+      await _pushCurrentLocation(user);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location saved'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Save failed: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingManual = false;
+        });
+      }
+    }
+  }
+
   Future<void> _stopTracking() async {
-    await _sub?.cancel();
-    _sub = null;
+    _timer?.cancel();
+    _timer = null;
     if (!mounted) return;
     setState(() {
       _isTracking = false;
@@ -167,128 +235,216 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF141414),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Driver session',
-                    style: TextStyle(fontSize: 14, color: Colors.white70),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    email.isEmpty ? uid : email,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Firestore doc: bus_locations/$docId',
-                    style: const TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF141414),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Current GPS',
-                        style: TextStyle(fontSize: 14, color: Colors.white70),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _isTracking ? Colors.green.withValues(alpha: 0.15) : Colors.white10,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: _isTracking ? Colors.green.withValues(alpha: 0.4) : Colors.white12,
-                          ),
-                        ),
-                        child: Text(
-                          _isTracking ? 'LIVE' : 'OFF',
-                          style: TextStyle(
-                            color: _isTracking ? Colors.greenAccent : Colors.white60,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    coords,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _lastSentAt == null ? 'Last sent: —' : 'Last sent: ${_lastSentAt!.toLocal()}',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  ),
-                  if (_status != null) ...[
-                    const SizedBox(height: 10),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              /// DRIVER SESSION CARD
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141414),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Driver session',
+                      style: TextStyle(fontSize: 14, color: Colors.white70),
+                    ),
+                    const SizedBox(height: 8),
                     Text(
-                      _status!,
-                      style: TextStyle(
-                        color: _status!.startsWith('Failed') || _status!.contains('error')
-                            ? Colors.redAccent
-                            : Colors.white70,
-                        fontSize: 13,
+                      email.isEmpty ? uid : email,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Firestore doc: bus_locations/$docId',
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 12,
                       ),
                     ),
                   ],
-                ],
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              height: 54,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isTracking ? Colors.redAccent : Colors.blueAccent,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
-                onPressed: _isStarting
-                    ? null
-                    : _isTracking
-                        ? _stopTracking
-                        : _startTracking,
-                child: _isStarting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : Text(
-                        _isTracking ? 'Stop tracking' : 'Start tracking',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
               ),
-            ),
-          ],
+
+              const SizedBox(height: 16),
+
+              /// GPS CARD
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141414),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    /// HEADER
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Current GPS',
+                          style: TextStyle(fontSize: 14, color: Colors.white70),
+                        ),
+
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _isStarting ? null : _toggleLiveFromChip,
+                            borderRadius: BorderRadius.circular(999),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _isTracking
+                                    ? Colors.green.withValues(alpha: 0.15)
+                                    : Colors.white10,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: _isTracking
+                                      ? Colors.green.withValues(alpha: 0.4)
+                                      : Colors.white24,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_isStarting) ...[
+                                    const SizedBox(
+                                      height: 14,
+                                      width: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  Text(
+                                    _isTracking ? 'LIVE' : 'OFF',
+                                    style: TextStyle(
+                                      color: _isTracking
+                                          ? Colors.greenAccent
+                                          : Colors.white70,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  if (!_isStarting) ...[
+                                    const SizedBox(width: 6),
+                                    Icon(
+                                      _isTracking
+                                          ? Icons.toggle_on
+                                          : Icons.toggle_off,
+                                      size: 18,
+                                      color: _isTracking
+                                          ? Colors.greenAccent
+                                          : Colors.white54,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Text(
+                      coords,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    Text(
+                      _lastSentAt == null
+                          ? 'Last sent: —'
+                          : 'Last sent: ${_lastSentAt!.toLocal()}',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                    ),
+
+                    if (_status != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _status!,
+                        style: TextStyle(
+                          color:
+                              _status!.startsWith('Failed') ||
+                                  _status!.contains('error')
+                              ? Colors.redAccent
+                              : Colors.white70,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 30),
+
+              /// Save current GPS once (manual); live updates still use LIVE/OFF chip.
+              SizedBox(
+                height: 54,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2E7D32),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  onPressed: _isSavingManual ? null : _saveLocationNow,
+                  icon: _isSavingManual
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.save_rounded),
+                  label: Text(
+                    _isSavingManual ? 'Saving...' : 'Save',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                _isTracking
+                    ? 'Tap LIVE to stop automatic updates. Use Save anytime for an extra send.'
+                    : 'Tap OFF to start live updates every 4 seconds.',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
-

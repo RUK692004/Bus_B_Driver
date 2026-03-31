@@ -15,6 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
 
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _errorMessage;
 
   @override
@@ -49,7 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       if (!mounted) return;
 
-      Navigator.pushReplacement(
+      Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => const DriverBusDashboardScreen(),
@@ -176,13 +177,26 @@ class _LoginScreenState extends State<LoginScreen> {
                           // Password Field
                           TextField(
                             controller: _passwordController,
-                            obscureText: true,
+                            obscureText: _obscurePassword,
                             style: const TextStyle(color: Colors.white),
                             decoration: InputDecoration(
                               hintText: "Password",
                               hintStyle: const TextStyle(color: Colors.white54),
                               filled: true,
                               fillColor: Colors.grey[900],
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                  color: Colors.white70,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(15),
                                 borderSide: BorderSide.none,

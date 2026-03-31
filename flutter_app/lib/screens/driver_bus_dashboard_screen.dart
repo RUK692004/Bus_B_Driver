@@ -4,12 +4,18 @@ import 'package:flutter/material.dart';
 
 import 'add_bus_screen.dart';
 import 'driver_route_screen.dart';
+import 'login_screen.dart';
 
 class DriverBusDashboardScreen extends StatelessWidget {
   const DriverBusDashboardScreen({super.key});
 
-  Future<void> _logout() async {
+  Future<void> _logout(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
   }
 
   @override
@@ -73,13 +79,7 @@ class DriverBusDashboardScreen extends StatelessWidget {
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'uid: $uid',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white38, fontSize: 12),
-                            ),
+                            // UID is intentionally hidden in UI.
                           ],
                         ),
                       ),
@@ -87,7 +87,7 @@ class DriverBusDashboardScreen extends StatelessWidget {
                         tooltip: 'Logout',
                         icon: const Icon(Icons.logout, color: Colors.white70),
                         onPressed: () async {
-                          await _logout();
+                          await _logout(context);
                         },
                       ),
                     ],
